@@ -1,18 +1,42 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-
-
 # TO RUN : - uvicorn main:app --reload
+
+from fastapi import FastAPI, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from typing import List
+
+import models
+import database
+
+
+#if the table does not exist create it
+models.Base.metadata.create_all(bind = database.engine)
+
 
 # Initialize the app
 app = FastAPI()
 
-class Note(BaseModel):
+class NoteSchema(BaseModel):
     title: str
     content: str
 
+    # tells pydantic: It's okay to read data from a standard Python class object
+    class Config:
+        orm_mode = True
 
-my_notes = []
+
+#Dependency ( databse session)
+# if a requst comes in , it opens a connections
+# and upon leaving it closes the connection
+
+def get_db():
+    db = database.SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 
 @app.get("/") 
 def home():
@@ -22,49 +46,65 @@ def home():
 
 
 #API Endpoint to post data  ( POST )
-@app.post("/notes")  
-def create_note(new_note:Note):
-    my_notes.append(new_note)
+@app.post("/notes" , response_model=NoteSchema)  
+def create_note(note:NoteSchema ,db :Session = Depends(get_db)):
 
-    return {"message:" : " Note added successfuly","Data": new_note}
+   new_note = models.NoteDB(title=note.title ,content = note.content)
+
+    #add to db
+   db.add(new_note)
+
+    #save
+   db.commit()
+
+   #refresh to get generated ID
+   db.refresh(new_note)
+
+   return new_note
 
 
 #API Endpoint to get all notes
-@app.get("/notes") 
-def get_all_notes():
-    return {"count: " : len(my_notes) , "notes" : my_notes}
+@app.get("/notes", response_model= List[NoteSchema]) 
+def read_notes(db: Session = Depends(get_db)):
+    #Select * from notes
+    notes = db.query(models.NoteDB).all()
+    return notes
 
+@app.get("/notes/{note_id}" , response_model=NoteSchema)
+def read_note(note_id: int , db : Session = Depends(get_db)):
+    note = db.query(models.NoteDB).filter(models.NoteDB.id == note_id).first()
 
-#API Endpoint to read a specific note ( GET )
-@app.get("/notes/{note_id}")
-def get_note(note_id :int):
-    if note_id < 0 or note_id >= len(my_notes):
-        return {"message: " : "Note Not Found!"}
-    return my_notes[note_id]
-
-
-#API Endpoint to update a Note ( PUT )
-@app.put("/notes/{note_id}")
-def update_note(note_id:int, updated_note : str):
-    if note_id < 0 or note_id >= len(my_notes):
-        return {"message: " : "Note not Found!"}
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
     
-    my_notes[note_id] = update_note
-
-    return {"message: " : "Note updated"}
+    return note
 
 
-#API Endpoint to delte a node ( DELETE )
-@app.delete("/notes/{note_id}")
-def delete_note(note_id : int):
-    if note_id < 0 or note_id >= len(my_notes):
-        return {"message: " : "Note not Found!"}
+@app.put("/notes/{note_id}" , response_model= NoteSchema)
+def update_note(note_id: int, updated_note: NoteSchema, db :Session = Depends(get_db)):
+    db_note = db.query(models.NoteDB).filter(models.NoteDB.id == note_id).first()
+
+    if db_note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
     
-    my_notes.pop(note_id)
+    db_note.title = updated_note.title
+    db_note.content = updated_note.content
 
-    return {"message: " : "Note deleted"}
+    db.commit()
+
+    db.refresh(db_note)
+    return db_note
 
 
 
+@app.delete("/notes/{note_id}",response_model= NoteSchema)
+def delete_note(note_id : int , db: Session = Depends(get_db)):
+    db_note = db.query(models.NoteDB).filter(models.NoteDB.id == note_id).first()
 
-
+    if db_note is None:
+        raise HTTPException(status_code=404 , detail = "Note not found")
+    
+    db.delete(db_note)
+    db.commit()
+    
+    return {"message": "Note deleted successfully"}

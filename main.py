@@ -8,6 +8,7 @@ from typing import List
 import models
 import database
 
+import ai_service
 
 #if the table does not exist create it
 models.Base.metadata.create_all(bind = database.engine)
@@ -19,7 +20,7 @@ app = FastAPI()
 class NoteSchema(BaseModel):
     title: str
     content: str
-
+    summary : str | None = None 
     # tells pydantic: It's okay to read data from a standard Python class object
     class Config:
         orm_mode = True
@@ -49,7 +50,13 @@ def home():
 @app.post("/notes" , response_model=NoteSchema)  
 def create_note(note:NoteSchema ,db :Session = Depends(get_db)):
 
-   new_note = models.NoteDB(title=note.title ,content = note.content)
+   generated_summary = ai_service.get_summary(note.content)
+
+   new_note = models.NoteDB(
+        title=note.title, 
+        content=note.content,
+        summary=generated_summary 
+    )
 
     #add to db
    db.add(new_note)
@@ -97,7 +104,7 @@ def update_note(note_id: int, updated_note: NoteSchema, db :Session = Depends(ge
 
 
 
-@app.delete("/notes/{note_id}",response_model= NoteSchema)
+@app.delete("/notes/{note_id}")
 def delete_note(note_id : int , db: Session = Depends(get_db)):
     db_note = db.query(models.NoteDB).filter(models.NoteDB.id == note_id).first()
 
